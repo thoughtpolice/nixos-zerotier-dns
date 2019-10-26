@@ -93,9 +93,8 @@ Import the `./module.nix` from somewhere. Then, in `configuration.nix`,
 That's it. This will automatically enable `services.zerotierone`, so you don't
 have to. CoreDNS will refresh its zone entries from a `hosts(5)` file under
 `/etc/coredns-zt` through timer services every minute. It also configures your
-NixOS machine to use `127.0.0.1` as the local nameserver (followed by `8.8.8.8`
-as a backup in case the ZT network is offline), since `dnscrypt-proxy` will
-handle upstream connections.
+NixOS machine to use `127.0.0.1` as the local nameserver, since
+`dnscrypt-proxy` will handle upstream connections.
 
 Now, try something like:
 
@@ -175,6 +174,18 @@ of CoreDNS + `hosts(5)`, but I only chose `dnscrypt-proxy` after realizing this
 and having CoreDNS in place. But I think having each of these do what they were
 intended to do (private, dedicated upstream resolver vs "dynamic" DNS proxy) is
 perhaps better in the long run.
+
+# Bugs
+
+It's a DNS server setup, so it's sensitive to fuck ups. If it fucks up, the
+machines using it as a DNS server will probably be OK, if you have fallbacks
+are configured, you just won't route ZeroTier names, and you'll get more ads.
+
+But, the NixOS machine running this will probably need to be fixed manually,
+since it won't be able to resolve cache.nixos.org for
+downloads/`nixos-rebuild`. (Personally I just kept around a copy of CoreDNS and
+then wrote a `Corefile` to do temporary serving for rebuilds in such a case,
+but I can't help you too much.) Good luck.
 
 # License
 
