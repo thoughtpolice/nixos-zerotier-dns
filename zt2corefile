@@ -1,0 +1,61 @@
+#! /usr/bin/env bash
+
+# zt2corefile: query the local zerotier configuration and prepare a Corefile
+# fragment for CoreDNS that we can use to give names to network members.
+
+# usage:
+#
+#     ./zt2corefile 1053 homenet.zt:$NETWORK_ID >> Corefile
+
+set -eo pipefail
+
+## -----------------------------------------------------------------------------
+
+if [ "$1" != "" ]; then
+  PORT="$1"
+  shift
+else
+  PORT=${1:-1053}
+fi
+
+[ "$1" = "" ] && \
+  >&2 echo "ERROR: must provide at least one ZT network id!" && \
+  exit 1
+
+## -----------------------------------------------------------------------------
+
+DNSCRYPT_PORT=$(( ${PORT} + 1000 ))
+DOMAINS=()
+ADDRS=()
+
+for NETWORK in $@; do
+  mapfile -td \: FIELDS < <(printf "%s\0" "$NETWORK")
+  DNSNAME="${FIELDS[0]}"
+  NETWORK="${FIELDS[1]}"
+  DOMAINS+=("$DNSNAME")
+
+  addrs=$(zerotier-cli listnetworks -j | \
+      jq -r ".[] | select(.nwid == \"$NETWORK\") |
+             .assignedAddresses | .[]")
+
+  ADDRS+=("  # $DNSNAME")
+  for addr in $addrs; do
+    addr=${addr::-3} # slice off cidr mask
+    ADDRS+=("  bind $addr")
+  done
+  ADDRS+=("") # newline, to look nice
+done
+
+## -----------------------------------------------------------------------------
+
+echo ".:${PORT} {"
+for x in "${ADDRS[@]}"; do printf "%s\n" "$x"; done
+echo "  # localhost"
+echo "  bind 127.0.0.1 ::1"
+echo
+echo "  # handle specific domains via hosts, otherwise fallthrough"
+echo "  hosts /etc/coredns-zt/hosts ${DOMAINS[@]} {"
+echo "    fallthrough"
+echo "  }"
+echo "  forward . dns://127.0.0.1:${DNSCRYPT_PORT}"
+echo "}"

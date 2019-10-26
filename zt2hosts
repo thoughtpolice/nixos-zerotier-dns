@@ -1,0 +1,121 @@
+#! /usr/bin/env bash
+
+# zt2hosts: contact a ZeroTier One API controller, and convert a list of
+# authorized network members to hosts(5) format
+
+set -eo pipefail
+
+## -----------------------------------------------------------------------------
+
+[[ -z "$ZT_API_TOKEN" ]] && \
+  >&2 echo "ERROR: must set ZT_API_TOKEN!" && \
+  exit 1
+
+[ "$1" = "" ] && \
+  >&2 echo "ERROR: must provide at least one network ID!" && \
+  exit 1
+
+## -----------------------------------------------------------------------------
+
+AUTH_TOKEN="${ZT_API_TOKEN}"
+API_ADDRESS=${API:-"my.zerotier.com"}
+
+API_URL="https://${API_ADDRESS}/api"
+AUTH_HDR="Authorization: bearer ${AUTH_TOKEN}"
+
+## -----------------------------------------------------------------------------
+
+get_netinfo() { curl -sH "$AUTH_HDR" "$API_URL/network/$1"; }
+get_members() { curl -sH "$AUTH_HDR" "$API_URL/network/$1/member"; }
+
+print_ipv6_id() {
+  printf "%s:%s:%s" \
+    $(echo "$1" | cut -c1-2) \
+    $(echo "$1" | cut -c3-6) \
+    $(echo "$1" | cut -c7-10)
+}
+
+print_rfc4193() {
+  printf "fd%s:%s:%s:%s:%s99:93%s" \
+    $(echo "$2" | cut -c1-2) \
+    $(echo "$2" | cut -c3-6) \
+    $(echo "$2" | cut -c7-10) \
+    $(echo "$2" | cut -c11-14) \
+    $(echo "$2" | cut -c15-16) \
+    $(print_ipv6_id "$1")
+}
+
+print_6plane() {
+  local TOP=${2:0:8}
+  local BOT=${2:9:16}
+  local hashed=$(printf '%x\n' "$(( 0x$TOP ^ 0x$BOT ))")
+
+  printf "fc%s:%s:%s%s:0000:0000:0001" \
+    $(echo "$hashed" | cut -c1-2) \
+    $(echo "$hashed" | cut -c3-6) \
+    $(echo "$hashed" | cut -c7-8) \
+    $(print_ipv6_id "$1")
+}
+
+## -----------------------------------------------------------------------------
+
+ipv4_lines=("127.0.0.1 localhost")
+ipv6_lines=("::1 localhost ip6-localhost ip6-loopback")
+
+for NETWORK in $@; do
+  mapfile -td \: FIELDS < <(printf "%s\0" "$NETWORK")
+  DNSNAME="${FIELDS[0]}"
+  NETWORK="${FIELDS[1]}"
+
+  netmembers=$(get_members "$NETWORK")
+  netinfo=$(get_netinfo "$NETWORK")
+  # echo "network: $NETWORK (alias '$DNSNAME')"
+
+  joined=$(echo "$netmembers" | \
+    jq '.[] | select(.config.authorized == true) |
+        { name: .name, id: .nodeId, ips: .config.ipAssignments }')
+
+  v6conf=$(echo "$netinfo" | jq -c '.config.v6AssignMode')
+  sixplane=$(echo "$v6conf" | jq -r '.["6plane"]')
+  rfc4193=$(echo "$v6conf" | jq -r '.rfc4193')
+
+  for entry in $(echo "$joined" | jq -c '.'); do
+    nodeid=$(echo "$entry" | jq -r '.id')
+    line=$(printf "%s\t%s.%s\t%s" \
+      $(echo "$entry" | jq -r '.ips[0]') \
+      $(echo "$entry" | jq -r '.name') \
+      "$DNSNAME" \
+      "$nodeid.$DNSNAME")
+    ipv4_lines+=("$line")
+  done
+
+  # Print IPv6 block
+  for entry in $(echo "$joined" | jq -c '.'); do
+    nodeid=$(echo "$entry" | jq -r '.id')
+
+    if [ "$rfc4193" = "true" ]; then
+      line=$(printf "%s\t%s.%s\t%s" \
+        $(print_rfc4193 "$nodeid" "$NETWORK") \
+        $(echo "$entry" | jq -r '.name') \
+        "$DNSNAME" \
+        "$nodeid.$DNSNAME")
+      ipv6_lines+=("$line")
+    fi
+
+    if [ "$sixplane" = "true" ]; then
+      line=$(printf "%s\t%s.%s\t%s" \
+        $(print_6plane "$nodeid" "$NETWORK") \
+        $(echo "$entry" | jq -r '.name') \
+        "$DNSNAME" \
+        "$nodeid.$DNSNAME")
+      ipv6_lines+=("$line")
+    fi
+  done
+done
+
+## -----------------------------------------------------------------------------
+
+(
+  for x in "${ipv4_lines[@]}"; do printf "%s\n" "$x"; done
+  for x in "${ipv6_lines[@]}"; do printf "%s\n" "$x"; done
+) | column -t
