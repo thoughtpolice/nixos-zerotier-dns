@@ -20,15 +20,23 @@ let
   network-string = lib.concatStringsSep " " (lib.mapAttrsToList (z: n: "${z}:${n}") cfg.networks);
 
   zt-coredns-services = {
+
+    # Initialize the DNS files that are always needed by other services.
+    # This avoids tricky service ordering dependencies.
     zt-dns-init = {
       description = "setup ZeroTier DNS files";
       script = ''
         mkdir -p /etc/coredns-zt/
         touch /etc/coredns-zt/dns-blacklist.txt
+        touch /etc/coredns-zt/hosts
       '';
       serviceConfig.Type = "oneshot";
     };
 
+    # dnscrypt-proxy. This service handles requests going back to upstream
+    # resolvers when they're not part of the ZeroTier network. It also
+    # sinkholes bad domains and uses random upstream dnscrypt-enabled resolvers
+    # as well.
     zt-dnscrypt =
       let
         dnscrypt-config = pkgs.runCommand "dnscrypt-proxy.toml" {} ''
@@ -60,6 +68,10 @@ let
         after    = [ "network-online.target" "zt-dns-init.service" ];
       };
 
+    # CoreDNS. This service handles all incoming DNS requests and effectively
+    # acts like a proxy to direct them to the correct host, or upstream
+    # resolver. ZeroTier network members are handled by a hosts file, while all
+    # other names are forwarded to dnscrypt-proxy.
     zt-coredns = {
       description = "CoreDNS service for ZeroTier networks";
 
@@ -91,6 +103,9 @@ let
       };
     };
 
+    # Timed service: update the list of ZeroTier network members in the 'hosts'
+    # file for our private domains. Runs once a minute. NOTE: Requires CoreDNS,
+    # because 'zt2hosts' needs it to resolve my.zerotier.com!
     zt-dns-update-hosts = {
       description = "hosts(5) update for ZeroTier DNS";
       startAt = "minutely";
@@ -108,13 +123,16 @@ let
         EnvironmentFile = "/etc/coredns-zt/api-token";
       };
 
-      requires = [ "zt-coredns.service" "zt-dns-init.service" ];
-      after    = [ "zt-coredns.service" "zt-dns-init.service" ];
+      requires = [ "zt-coredns.service" ];
+      after    = [ "zt-coredns.service" ];
     };
 
+    # Timed service: update the DNS blacklist from the upstream copy, once a
+    # day. NOTE: requires CoreDNS, because curl needs it to resolve the name,
+    # and we set the resolver to 127.0.0.1!
     zt-dns-update-blacklist = {
       description = "daily dnscrypt-proxy2 blacklist update";
-      # startAt = "daily";
+      startAt = "daily";
 
       path = [ pkgs.curl ];
       script = ''
@@ -129,8 +147,8 @@ let
         PrivateTmp = true;
       };
 
-      requires = [ "zt-dnscrypt.service" ];
-      after    = [ "zt-dnscrypt.service" ];
+      requires = [ "zt-coredns.service" ];
+      after    = [ "zt-coredns.service" ];
     };
   };
 in
