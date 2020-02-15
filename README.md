@@ -72,7 +72,7 @@ same networks, the full set of names does not resolve.
 ``` bash
 $ sudo -i
 mkdir -p /etc/coredns-zt
-echo "API_TOKEN" > /etc/coredns-zt/api-token
+echo "ZT_API_TOKEN=secretoken" > /etc/coredns-zt/api-token
 chmod 0600 /etc/coredns-zt/api-token
 ```
 
