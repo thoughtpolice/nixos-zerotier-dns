@@ -1,12 +1,22 @@
-{ stdenv
+{ stdenv, fetchFromGitHub
 , jq, zerotierone, curl
 , utillinux
 }:
-
+let
+  gitignoreSrc = fetchFromGitHub {
+    owner = "hercules-ci";
+    repo = "gitignore";
+    # put the latest commit sha of gitignore Nix library here:
+    rev = "f9e996052b5af4032fe6150bba4a6fe4f7b9d698";
+    # use what nix suggests in the mismatch message here:
+    sha256 = "sha256:0jrh5ghisaqdd0vldbywags20m2cxpkbbk5jjjmwaw0gr8nhsafv";
+  };
+  inherit (import gitignoreSrc {}) gitignoreSource;
+in
 stdenv.mkDerivation rec {
   pname = "coredns-zt";
   version = "0.0";
-  src = builtins.fetchGit ./.;
+  src = gitignoreSource ./.;
 
   patchPhase = ''
     substituteInPlace ./zt2hosts \
